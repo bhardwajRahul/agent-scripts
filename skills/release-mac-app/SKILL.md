@@ -16,6 +16,7 @@ Use for BlackBar, RepoBar, CodexBar, Trimmy, and similar Sparkle-updated macOS a
   unavoidable, use `/bin/bash -p`, never plain `bash mac-release`.
 - Keep app-specific build/package/sign behavior in repo scripts unless it is already manifest-driven.
 - Never print private key material.
+- Upload app/dSYM assets to a draft before publication. After a failure, preserve the release, tags, appcast commit, and local edits; inspect existing state and resume the failed step instead of deleting or retagging a possibly published release.
 - Prefer `MAC_RELEASE_SPARKLE_OP_REF` for headless release signing when the key is in 1Password; otherwise prefer
   Keychain Sparkle signing. `SPARKLE_PRIVATE_KEY_FILE` is an explicit local override only.
 

@@ -64,6 +64,8 @@ jobs:
           /bin/bash skills/release-mac-app/scripts/mac-release-canary.test.sh
           /bin/bash skills/release-mac-app/scripts/mac-release-provider.test.sh
           /bin/bash skills/release-mac-app/scripts/mac-release-assets.test.sh
+          /bin/bash skills/release-mac-app/scripts/mac-release-publication.test.sh
+          /bin/bash skills/release-mac-app/scripts/mac-release-download.test.sh
 
       - name: Test maintainer orchestrator worker boundary
         run: scripts/test-maintainer-orchestrator-policy

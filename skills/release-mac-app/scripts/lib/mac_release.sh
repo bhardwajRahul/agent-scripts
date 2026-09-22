@@ -907,15 +907,14 @@ extract_notes_from_changelog() {
 import sys, pathlib, re
 version, dest = sys.argv[1], pathlib.Path(sys.argv[2])
 text = pathlib.Path("CHANGELOG.md").read_text()
-pattern = re.compile(rf"^##\s+(?:\[)?{re.escape(version)}(?:\])?(?:\s+.*)?$", re.M)
+pattern = re.compile(rf"^##[ \t]+(?:\[)?{re.escape(version)}(?:\])?(?:[ \t]+.*)?$", re.M)
 m = pattern.search(text)
 if not m:
     raise SystemExit("section not found")
 start = m.end()
 next_header = text.find("\n## ", start)
 chunk = text[start: next_header if next_header != -1 else len(text)]
-lines = [ln for ln in chunk.strip().splitlines() if ln.strip()]
-dest.write_text("\n".join(lines) + "\n")
+dest.write_text(chunk.strip() + "\n")
 PY
 }
 
@@ -928,7 +927,7 @@ mac_release_changelog_html() {
 import html, pathlib, re, sys
 version, changelog, app, repo = sys.argv[1:5]
 text = pathlib.Path(changelog).read_text()
-pattern = re.compile(rf"^##\s+(?:\[)?{re.escape(version)}(?:\])?(?:\s+.*)?$", re.M)
+pattern = re.compile(rf"^##[ \t]+(?:\[)?{re.escape(version)}(?:\])?(?:[ \t]+.*)?$", re.M)
 m = pattern.search(text)
 if not m:
     raise SystemExit(f"changelog section not found for {version}")
@@ -1016,13 +1015,35 @@ raise SystemExit(f"No appcast entry for version {version}")
 PY
 }
 
+mac_release_download_enclosure() {
+  local url=${1:?"enclosure URL required"} dest=${2:?"destination required"}
+  local attempt=1 delay=2 http_code curl_rc
+  require_bin curl
+  while true; do
+    curl_rc=0
+    http_code=$(curl --fail --location --silent --show-error --connect-timeout 15 --max-time 300 \
+      --output "$dest" --write-out '%{http_code}' "$url") || curl_rc=$?
+    [[ "$curl_rc" != "0" ]] || return 0
+    case "$curl_rc:$http_code" in
+      *:401|*:403) return "$curl_rc" ;;
+      22:404|22:408|22:425|22:429|22:500|22:502|22:503|22:504|5:*|6:*|7:*|18:*|28:*|52:*|55:*|56:*) ;;
+      *) return "$curl_rc" ;;
+    esac
+    [[ "$attempt" -lt 6 ]] || return "$curl_rc"
+    echo "Enclosure not ready (HTTP ${http_code:-unknown}, curl $curl_rc); retrying in ${delay}s ($attempt/6)." >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
 verify_enclosure() {
   local url=$1 sig=$2 key_file=$3 expected_len=$4
   require_bin curl sign_update
   local tmp account_args=()
   tmp=$(mktemp /tmp/sparkle-enclosure.XXXX)
   trap 'rm -f "${tmp:-}"' RETURN
-  curl -L -o "$tmp" "$url"
+  mac_release_download_enclosure "$url" "$tmp"
   local len
   len=$(stat -f%z "$tmp")
   [[ "$len" == "$expected_len" ]] || mac_release_die "Length mismatch for $url (expected $expected_len, got $len)"
@@ -1052,7 +1073,7 @@ verify_codesign_from_enclosure() {
   tmp_dir=$(mktemp -d /tmp/sparkle-verify.XXXX)
   trap 'rm -rf "${tmp_dir:-}"' RETURN
   tmp_zip="$tmp_dir/enclosure.zip"
-  curl -L -o "$tmp_zip" "$url"
+  mac_release_download_enclosure "$url" "$tmp_zip"
   /usr/bin/ditto -x -k --norsrc "$tmp_zip" "$tmp_dir"
   app=$(find "$tmp_dir" -maxdepth 2 -name "${APP_NAME}.app" -not -path "*/__MACOSX/*" | head -n 1)
   [[ -n "$app" ]] || mac_release_die "No ${APP_NAME}.app found in enclosure $url"
@@ -1756,15 +1777,13 @@ mac_release_release() {
   current_branch=$(git branch --show-current)
   [[ "$current_branch" == "$release_branch" ]] || mac_release_die "Release must run on $release_branch; current branch is ${current_branch:-detached}"
   require_clean_worktree
-  local pre_release_head
-  pre_release_head=$(git rev-parse HEAD)
   ensure_changelog_finalized "$MARKETING_VERSION"
   ensure_appcast_monotonic "$APPCAST" "$MARKETING_VERSION" "$BUILD_NUMBER"
   trap 'mac_release_cleanup_temp_sparkle_key' EXIT
   mac_release_load_1password_env
   mac_release_run_cmd "precheck" "${MAC_RELEASE_PRECHECK:-}"
   KEY_ARGS=()
-  local key_file="" notes_md="" release_created=0 tag_created=0 tag_pushed=0 appcast_committed=0 appcast_pushed=0
+  local key_file="" notes_md="" release_id="" publication_attempted=0 appcast_committed=0
   # shellcheck disable=SC2329 # invoked via EXIT trap
   cleanup_release() {
     local rc=$?
@@ -1780,15 +1799,12 @@ mac_release_release() {
     fi
     [[ -n "${key_file:-}" ]] && rm -f "$key_file"
     [[ -n "${notes_md:-}" ]] && rm -f "$notes_md"
-    if [[ "$rc" -ne 0 && "${appcast_pushed:-0}" != "1" ]]; then
-      if [[ "${release_created:-0}" == "1" ]]; then
-        gh release delete "$TAG" --repo "$MAC_RELEASE_REPO" --cleanup-tag -y >/dev/null 2>&1 || true
-      elif [[ "${tag_pushed:-0}" == "1" ]]; then
-        git push origin --delete "$TAG" >/dev/null 2>&1 || true
-      fi
-      [[ "${tag_created:-0}" == "1" ]] && git tag -d "$TAG" >/dev/null 2>&1 || true
-      if [[ "${appcast_committed:-0}" == "1" ]]; then
-        git reset --hard "$pre_release_head" >/dev/null 2>&1 || true
+    if [[ "$rc" -ne 0 && "${appcast_committed:-0}" == "1" ]]; then
+      echo "Release stopped; preserving release, tags, and appcast commit for recovery." >&2
+      if [[ "${publication_attempted:-0}" == "1" ]]; then
+        echo "Publication was attempted. Inspect $MAC_RELEASE_REPO release $TAG before resuming verification or push." >&2
+      else
+        echo "Inspect $MAC_RELEASE_REPO draft release $TAG and uploaded assets before continuing." >&2
       fi
     fi
     exit "$rc"
@@ -1819,14 +1835,16 @@ mac_release_release() {
   else
     git tag --no-sign ${tag_args[@]+"${tag_args[@]}"} "$TAG"
   fi
-  tag_created=1
   git push ${push_tag_args[@]+"${push_tag_args[@]}"} origin "$TAG"
-  tag_pushed=1
-  gh release create "$TAG" --repo "$MAC_RELEASE_REPO" --title "${APP_NAME} ${MARKETING_VERSION}" --notes-file "$notes_md"
-  release_created=1
+  release_id=$(gh api --method POST "repos/$MAC_RELEASE_REPO/releases" \
+    -f tag_name="$TAG" -f name="${APP_NAME} ${MARKETING_VERSION}" -F body=@"$notes_md" -F draft=true --jq .id)
+  [[ "$release_id" =~ ^[0-9]+$ ]] || mac_release_die "GitHub did not return a release ID for draft $TAG"
   local release_assets=("$APP_ZIP")
   [[ -n "$DSYM_ZIP" ]] && release_assets+=("$DSYM_ZIP")
   gh release upload "$TAG" "${release_assets[@]}" --repo "$MAC_RELEASE_REPO"
+  # A failed response can still mean GitHub published and started release workflows.
+  publication_attempted=1
+  gh api --method PATCH "repos/$MAC_RELEASE_REPO/releases/$release_id" -F draft=false --silent
   if [[ -n "$key_file" ]]; then
     SPARKLE_PRIVATE_KEY_FILE="$key_file" "$0" verify-appcast "$MARKETING_VERSION"
   else
@@ -1834,7 +1852,6 @@ mac_release_release() {
   fi
   wait_for_assets "$TAG" "$ARTIFACT_PREFIX"
   git push origin "HEAD:$release_branch"
-  appcast_pushed=1
   if [[ "${MAC_RELEASE_RUN_SPARKLE_UPDATE_TEST:-${RUN_SPARKLE_UPDATE_TEST:-0}}" == "1" && -x "$ROOT/Scripts/test_live_update.sh" ]]; then
     local prev_tag
     prev_tag=$(git tag --sort=-v:refname | sed -n '2p')

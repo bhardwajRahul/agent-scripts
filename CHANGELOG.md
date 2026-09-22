@@ -6,6 +6,8 @@ summary: Timeline of guardrail helper changes mirrored from Sweetistics and rela
 
 ## Unreleased
 
+- Upload macOS release archives before publishing, preserve release/tag/commit state on failures, retry transient enclosure downloads, and retain changelog section spacing in release notes.
+
 - Correct Octopool calling guidance for native JSON bundles, pagination, caller-owned headers, exact-run CI verification, and sandbox coverage.
 
 - Guard Xcode installs with bounded Git/Python smoke checks and selected-bundle rollback; require a Git host preflight before Codex workers and document the stable-Xcode workaround.
