@@ -75,6 +75,7 @@
 - Explicit land of own draft PR: ignore draft; mark ready if needed; continue.
 - `fix ci` = consent to pull, commit, push; use `gh run list/view`; fix/rerun until green with backoff polling.
 - GitHub quota: bare `gh` only (Octopool cache). Watch commands (`gh run watch`, `gh pr checks --watch`) shim-native since octopool 0.4.7; still poll one exact id, not loops.
+- Fan-out `gh` reads over many runs/checks/IDs: max 4 in flight. Never unbounded `Promise.all`/`allSettled`, `xargs -P0`, or `&` loops; one such census slowed the shared relay for every Mac (2026-09-23).
 - gh reads: request narrow `--json <fields>` for machine output. `--json` alone does not guarantee relay use: unsupported field bundles (such as PR `mergeStateStatus` or issue `comments`) use native gh for the whole export. Supported human output and exact recognized GraphQL projections can also relay; let the installed Octopool own routing.
 - Supported `gh api --paginate`/`--slurp` and `--hostname github.com` reads can relay. `--include` selects native caller credentials, not just fresher cache data. Use `OCTOPOOL_FRESH=1` or `Cache-Control: max-age=0` for relay freshness; preserve required decision fields and verify CI by exact run/head, not the newest broad-list row.
 - CI logs: fetch once per failed run; reuse printed output. One `gh search`/`list --json` over per-item view loops; narrow fields, exact refs.
